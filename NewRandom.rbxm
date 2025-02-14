@@ -1,0 +1,119 @@
+local NewRandom = {}
+
+local HttpService = game:GetService("HttpService")
+
+local API_URL = "https://qrng.anu.edu.au/API/jsonI.php"
+local CACHE_SIZE = 1000
+local MIN_CACHE = 100
+
+local NumberCache = {}
+local HexCache = {}
+local IsRequesting = false
+
+local function FetchQuantumNumbers(Type, Length, Size)
+	local Success, Result
+	local Params = string.format("?length=%d&type=%s", Length, Type)
+	if Size then
+		Params = Params .. string.format("&size=%d", Size)
+	end
+
+	Success, Result = pcall(function()
+		return HttpService:GetAsync(API_URL .. Params)
+	end)
+
+	if not Success then
+		warn("NewRandom: Failed to fetch numbers from ANU QRNG API:", Result)
+		return nil
+	end
+
+	Success, Result = pcall(function()
+		return HttpService:JSONDecode(Result)
+	end)
+
+	if not Success or not Result.success then
+		warn("NewRandom: Failed to decode API response:", Result)
+		return nil
+	end
+
+	return Result.data
+end
+
+local function RefillCache()
+	if IsRequesting then return end
+	IsRequesting = true
+
+	task.spawn(function()
+		local Data = FetchQuantumNumbers("uint8", CACHE_SIZE)
+		if Data then
+			NumberCache = Data
+		end
+		IsRequesting = false
+	end)
+end
+
+local function CheckCache()
+	if #NumberCache < MIN_CACHE and not IsRequesting then
+		RefillCache()
+	end
+end
+
+function NewRandom:GetNumber(Min, Max)
+	Min = Min or 0
+	Max = Max or 255
+
+	assert(type(Min) == "number" and type(Max) == "number", "Min and max must be numbers")
+	assert(Min < Max, "Min must be less than max")
+
+	CheckCache()
+
+	if #NumberCache == 0 then
+		return math.random(Min, Max)
+	end
+
+	local Rand = table.remove(NumberCache, 1)
+
+	return Min + (Rand / 255) * (Max - Min)
+end
+
+function NewRandom:GetHex(Length)
+	Length = Length or 8
+
+	assert(type(Length) == "number", "Length must be a number")
+	assert(Length > 0, "Length must be positive")
+
+	if #HexCache < Length then
+		local Data = FetchQuantumNumbers("hex16", Length)
+		if Data then
+			HexCache = Data
+		else
+			local Hex = ""
+			for i = 1, Length do
+				Hex = Hex .. string.format("%x", math.random(0, 15))
+			end
+			return Hex
+		end
+	end
+
+	return table.remove(HexCache, 1)
+end
+
+function NewRandom:GetBoolean(Probability)
+	Probability = Probability or 0.5
+
+	assert(type(Probability) == "number", "Probability must be a number")
+	assert(Probability >= 0 and Probability <= 1, "Probability must be between 0 and 1")
+
+	return self:GetNumber() <= (Probability * 255)
+end
+
+function NewRandom:GetRandomChoice(Array)
+	assert(type(Array) == "table", "Input must be a table")
+	assert(#Array > 0, "Array cannot be empty")
+
+	local Index = math.floor(self:GetNumber(1, #Array + 0.99))
+	return Array[Index]
+end
+
+RefillCache()
+
+return NewRandom
